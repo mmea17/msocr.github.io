@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR Web Processor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.7/axios.min.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-8">
+    <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-md p-6">
+        <h1 class="text-2xl font-bold text-center mb-6">OCR Web Processor</h1>
+        
+        <!-- File Upload Section -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-700 mb-2">
+                Select Image(s)
+            </label>
+            <input 
+                type="file" 
+                id="imageInput" 
+                multiple 
+                accept="image/*"
+                class="block w-full text-sm text-gray-500
+                       file:mr-4 file:py-2 file:px-4
+                       file:rounded-full file:border-0
+                       file:text-sm file:font-semibold
+                       file:bg-blue-50 file:text-blue-700
+                       hover:file:bg-blue-100"
+            >
+        </div>
+
+        <!-- Preview Section -->
+        <div id="imagePreview" class="mb-6 flex flex-wrap gap-2"></div>
+
+        <!-- Process Button -->
+        <button 
+            id="processBtn"
+            class="w-full bg-blue-600 text-white py-2 px-4 rounded-lg
+                   hover:bg-blue-700 disabled:bg-gray-400"
+            disabled
+        >
+            Process Images
+        </button>
+
+        <!-- Results Section -->
+        <div class="mt-6">
+            <label class="block text-sm font-medium text-gray-700 mb-2">
+                Extracted Text
+            </label>
+            <textarea 
+                id="resultText"
+                class="w-full h-48 p-2 border rounded-lg resize-y"
+                readonly
+                placeholder="Extracted text will appear here..."
+            ></textarea>
+        </div>
+
+        <!-- Download Button -->
+        <button 
+            id="downloadBtn"
+            class="mt-4 w-full bg-green-600 text-white py-2 px-4 rounded-lg
+                   hover:bg-green-700 disabled:bg-gray-400"
+            disabled
+        >
+            Download as TXT
+        </button>
+    </div>
+
+    <script>
+        const subscriptionKey = '5b4bcbf2dc1c4e5fa0a21b31649344a8';
+        const endpoint = 'https://bookmmea.cognitiveservices.azure.com/';
+        
+        let selectedFiles = [];
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const processBtn = document.getElementById('processBtn');
+        const resultText = document.getElementById('resultText');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        // Handle file selection
+        imageInput.addEventListener('change', (e) => {
+            selectedFiles = Array.from(e.target.files);
+            processBtn.disabled = selectedFiles.length === 0;
+            updateImagePreview();
+        });
+
+        // Update image preview
+        function updateImagePreview() {
+            imagePreview.innerHTML = '';
+            selectedFiles.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.className = 'h-24 w-24 object-cover rounded';
+                    imagePreview.appendChild(img);
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // Process images
+        processBtn.addEventListener('click', async () => {
+            processBtn.disabled = true;
+            resultText.value = 'Processing...';
+            let allText = [];
+
+            try {
+                for (const file of selectedFiles) {
+                    const text = await processImage(file);
+                    allText.push(`File: ${file.name}\n${text}\n`);
+                }
+                
+                resultText.value = allText.join('\n');
+                downloadBtn.disabled = false;
+            } catch (error) {
+                resultText.value = `Error: ${error.message}`;
+            } finally {
+                processBtn.disabled = false;
+            }
+        });
+
+        // Process single image
+        async function processImage(file) {
+            // First API call to submit the image
+            const response = await axios.post(
+                `${endpoint}vision/v3.1/read/analyze`,
+                file,
+                {
+                    headers: {
+                        'Content-Type': file.type,
+                        'Ocp-Apim-Subscription-Key': subscriptionKey
+                    }
+                }
+            );
+
+            // Get operation location from headers
+            const operationLocation = response.headers['operation-location'];
+
+            // Poll for results
+            while (true) {
+                const result = await axios.get(
+                    operationLocation,
+                    {
+                        headers: {
+                            'Ocp-Apim-Subscription-Key': subscriptionKey
+                        }
+                    }
+                );
+
+                if (result.data.status === 'succeeded') {
+                    return result.data.analyzeResult.readResults
+                        .flatMap(page => page.lines)
+                        .map(line => line.text)
+                        .join('\n');
+                }
+
+                if (result.data.status === 'failed') {
+                    throw new Error('OCR processing failed');
+                }
+
+                // Wait before polling again
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+
+        // Handle download
+        downloadBtn.addEventListener('click', () => {
+            const blob = new Blob([resultText.value], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ocr-results.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+</html>
